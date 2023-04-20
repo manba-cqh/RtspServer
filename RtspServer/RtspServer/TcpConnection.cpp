@@ -127,7 +127,13 @@ int TcpConnection::doSelect()
 				}
 
 				if (rtspOption == RTSP_PLAY) {
-					m_clientSocketsMap[m_readFdSet.fd_array[i]]->startPlay();
+					m_clientSocketsMap[m_readFdSet.fd_array[i]]->setPlayingStatus(PLAY_START);
+				}
+				else if (rtspOption == RTSP_PAUSE) {
+					m_clientSocketsMap[m_readFdSet.fd_array[i]]->setPlayingStatus(PLAY_PAUSE);
+				}
+				else if (rtspOption == RTSP_TEARDOWN) {
+					m_clientSocketsMap[m_readFdSet.fd_array[i]]->setPlayingStatus(PLAY_STOP);
 				}
 
 				return recvSize + 1;

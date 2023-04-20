@@ -209,7 +209,7 @@ int clntRtpPort1 = -1;
 int serverRtpSockfd = -1, serverRtcpSockfd = -1;
 std::string ClntIp;
 
-RtspSession::RtspSession(): m_sendRtpFrame(false)
+RtspSession::RtspSession(): m_playingStatus(PLAY_NONE)
 {
 
 }
@@ -237,6 +237,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 			strstr(firstLine, "DESCRIBE") ||
 			strstr(firstLine, "SETUP") ||
 			strstr(firstLine, "PLAY") ||
+			strstr(firstLine, "PAUSE") ||
 			strstr(firstLine, "TEARDOWN")) {
 			if (sscanf(firstLine, "%s %s %s\r\n", &method, &url, &version) != 3) {
 				printf("parse  error\n");
@@ -315,8 +316,17 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 
 		rtspOption = RTSP_PLAY;
 	}
+	else if (!strcmp(method, "PAUSE")) {
+		if (handlePauseReq(sendBuffer, cseq)) {
+			printf("handle PAUSE ERROR\n");
+		}
+		rtspOption = RTSP_PAUSE;
+	}
 	else if (!strcmp(method, "TEARDOWN")) {
-
+		if (handleTeardownReq(sendBuffer, cseq)) {
+			printf("handle TEARDOWN ERROR\n");
+		}
+		rtspOption = RTSP_TEARDOWN;
 	}
 
 	return std::string(sendBuffer);
@@ -389,11 +399,30 @@ int RtspSession::handlePlayReq(char* result, int cseq)
 	return 0;
 }
 
+int RtspSession::handlePauseReq(char* result, int cseq)
+{
+	sprintf(result, "RTSP / 1.0 200 OK"
+		"CSeq : %d"
+		"Session : 66334873\r\n\r\n",
+		cseq);
+
+	return 0;
+}
+
+int RtspSession::handleTeardownReq(char* result, int cseq)
+{
+	sprintf(result, "RTSP/1.0 200 OK"
+		"CSeq: %d\r\n\r\n",
+		cseq);
+
+	return 0;
+}
+
 int RtspSession::sendRtpFrame(void *obj)
 {
 	RtspSession* rtspSessionObj = (RtspSession*)obj;
 
-	while (!(rtspSessionObj->m_sendRtpFrame)) {
+	while (rtspSessionObj->m_playingStatus != PLAY_START) {
 		Sleep(40);
 	}
 
@@ -421,6 +450,15 @@ int RtspSession::sendRtpFrame(void *obj)
 	}
 
 	while (true) {
+		if (rtspSessionObj->m_playingStatus == PLAY_STOP) {
+			return 0;
+		}
+
+		if (rtspSessionObj->m_playingStatus != PLAY_START) {
+			Sleep(40);
+			continue;
+		}
+
 		frameSize = getFrameFromH264File(fp, frame, 500000);
 		if (frameSize < 0)
 		{
@@ -442,4 +480,6 @@ int RtspSession::sendRtpFrame(void *obj)
 	}
 	free(frame);
 	free(rtpPacket);
+
+	return 0;
 }
