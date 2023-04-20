@@ -209,7 +209,7 @@ int clntRtpPort1 = -1;
 int serverRtpSockfd = -1, serverRtcpSockfd = -1;
 std::string ClntIp;
 
-RtspSession::RtspSession()
+RtspSession::RtspSession(): m_sendRtpFrame(false)
 {
 
 }
@@ -219,22 +219,16 @@ RtspSession::~RtspSession()
 
 }
 
-void RtspSession::doConversation(SOCKET s, std::string data, std::string clntIp)
+std::string RtspSession::doConversation(std::string data, std::string clntIp, RTSP_OPTIONS& rtspOption)
 {
 	ClntIp = clntIp;
-	std::thread t = std::thread(RtspSession::conversationFunc, s, data);
-	t.detach();
-}
 
-void RtspSession::conversationFunc(SOCKET s, std::string data)
-{
-	char sendBuffer[1000];
+	char sendBuffer[SEND_BUFFER_SIZE];
 	char method[40];
 	char url[40];
 	char version[40];
 	int cseq;
 	int clientRtpPort, clientRtcpPort;
-	bool sendRtpFrameEnable = false;
 
 	const char *sep = "\n";
 	char* firstLine = strtok((char*)data.c_str(), sep);
@@ -278,16 +272,20 @@ void RtspSession::conversationFunc(SOCKET s, std::string data)
 		if (handleOptionReq(sendBuffer, cseq)) {
 			printf("handle OPTIONS error\n");
 		}
+		rtspOption = RESP_OPTION;
 	}
 	else if (!strcmp(method, "DESCRIBE")) {
 		if (handleDescribeReq(sendBuffer, cseq, url)) {
 			printf("handle DESCRIBE ERROR\n");
 		}
+		rtspOption = RTSP_DESCRIBE;
 	}
 	else if (!strcmp(method, "SETUP")) {
 		if (handleSetupReq(sendBuffer, cseq, clientRtpPort)) {
 			printf("handle DESCRIBE ERROR\n");
 		}
+
+		rtspOption = RTSP_SETUP;
 
 		serverRtpSockfd = createUdpSocket();
 		serverRtcpSockfd = createUdpSocket();
@@ -295,14 +293,14 @@ void RtspSession::conversationFunc(SOCKET s, std::string data)
 		if (serverRtpSockfd < 0 || serverRtcpSockfd < 0)
 		{
 			printf("failed to create udp socket\n");
-			return;
+			return "";
 		}
 
 		if (bindSocketAddr(serverRtpSockfd, "0.0.0.0", SERVER_RTP_PORT) < 0 ||
 			bindSocketAddr(serverRtcpSockfd, "0.0.0.0", SERVER_RTP_PORT + 1) < 0)
 		{
 			printf("failed to bind addr\n");
-			return;
+			return "";
 		}
 	}
 	else if (!strcmp(method, "PLAY")) {
@@ -310,17 +308,18 @@ void RtspSession::conversationFunc(SOCKET s, std::string data)
 			printf("handle PLAY ERROR\n");
 		}
 		else {
-			sendRtpFrameEnable = true;
+			//开启发送rtp包请求
+			std::thread t = std::thread(&RtspSession::sendRtpFrame, this, this);
+			t.detach();
 		}
+
+		rtspOption = RTSP_PLAY;
 	}
 	else if (!strcmp(method, "TEARDOWN")) {
+
 	}
 
-	send(s, sendBuffer, strlen(sendBuffer), 0);
-
-	if (!strcmp(method, "PLAY") && sendRtpFrameEnable) {
-		sendRtpFrame();
-	}
+	return std::string(sendBuffer);
 }
 
 int RtspSession::handleOptionReq(char* result, int cseq)
@@ -390,8 +389,14 @@ int RtspSession::handlePlayReq(char* result, int cseq)
 	return 0;
 }
 
-int RtspSession::sendRtpFrame()
+int RtspSession::sendRtpFrame(void *obj)
 {
+	RtspSession* rtspSessionObj = (RtspSession*)obj;
+
+	while (!(rtspSessionObj->m_sendRtpFrame)) {
+		Sleep(40);
+	}
+
 	int frameSize, startCode;
 	char* frame = (char*)malloc(500000);
 	struct RtpPacket* rtpPacket = (struct RtpPacket*)malloc(500000);

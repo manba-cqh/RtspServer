@@ -3,22 +3,25 @@
 #include <string>
 #include <WinSock2.h>
 
+#include "RtspDef.h"
+
 class RtspSession
 {
 public:
 	RtspSession();
 	~RtspSession();
 
-	void doConversation(SOCKET s, std::string data, std::string clntIp);
+	std::string doConversation(std::string data, std::string clntIp, RTSP_OPTIONS &rtspOption);
+	void startPlay() { m_sendRtpFrame = true; }
+	void stopPlay() { m_sendRtpFrame = false; }
 
 private:
-	static void conversationFunc(SOCKET s, std::string data);
-	static int handleOptionReq(char* result, int cseq);
-	static int handleDescribeReq(char* result, int cseq, char *url);
-	static int handleSetupReq(char* result, int cseq, int clientRtpPort);
-	static int handlePlayReq(char* result, int cseq);
-	static int sendRtpFrame();
+	int handleOptionReq(char* result, int cseq);
+	int handleDescribeReq(char* result, int cseq, char *url);
+	int handleSetupReq(char* result, int cseq, int clientRtpPort);
+	int handlePlayReq(char* result, int cseq);
+	int sendRtpFrame(void *obj);
 
 private:
-
+	bool m_sendRtpFrame;
 };

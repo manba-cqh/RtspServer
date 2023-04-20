@@ -2,9 +2,10 @@
 #include <stdio.h>
 #include <string>
 #include <WinSock2.h>
-
 #include <string>
-#include <vector>
+#include <map>
+
+#include "RtspSession.h"
 
 class TcpConnection
 {
@@ -19,7 +20,7 @@ public:
 
 private:
 	SOCKET m_tcpSocket;
-	std::vector<SOCKET> m_clientSockets;
+	std::map<SOCKET, RtspSession*> m_clientSocketsMap;
 	SOCKET m_currentClientSocket;
 	char *m_recvBuffer;
 	char m_clntIp[40];

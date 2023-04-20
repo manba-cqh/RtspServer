@@ -12,10 +12,6 @@ int main()
 	while (1) {
 		int recvSize = tcpConnection.doSelect();
 		if (recvSize > 0) {
-			SOCKET s;
-			std::string data;
-			tcpConnection.getRecvInfo(s, data);
-			rtspSession.doConversation(s, data, tcpConnection.getClntIp());
 		}
 	}
 }

@@ -10,8 +10,9 @@ TcpConnection::TcpConnection()
 TcpConnection::~TcpConnection()
 {
 	closesocket(m_tcpSocket);
-	for (int i = 0; i < m_clientSockets.size(); i++) {
-		closesocket(m_clientSockets[i]);
+	for (auto iter = m_clientSocketsMap.begin(); iter != m_clientSocketsMap.end(); iter++) {
+		delete iter->second;
+		closesocket(iter->first);
 	}
 	//×¢ÏúWinSocket
 	WSACleanup();
@@ -85,13 +86,19 @@ int TcpConnection::doSelect()
 
 	for (int i = 0; i < m_readFdSet.fd_count; i++) {
 		if (FD_ISSET(m_readFdSet.fd_array[i], &m_readFdSetCopy)) {
+			if (m_clientSocketsMap.find(m_readFdSet.fd_array[i]) == m_clientSocketsMap.end() && 
+				m_readFdSet.fd_array[i] != m_tcpSocket) {
+				continue;
+			}
+
 			if (m_readFdSet.fd_array[i] == m_tcpSocket) {
 				SOCKADDR_IN clntAddr;
 				int clntAddrSize = sizeof(clntAddr);
 				SOCKET clntSock = accept(m_tcpSocket, (SOCKADDR*)&clntAddr, &clntAddrSize);
 				strcpy(m_clntIp, inet_ntoa(clntAddr.sin_addr));
 				FD_SET(clntSock, &m_readFdSet);
-				m_clientSockets.push_back(clntSock);
+				RtspSession *rtspSession = new RtspSession();
+				m_clientSocketsMap.insert({ clntSock, rtspSession });
 				printf("new connection\n");
 				return 0;
 			}
@@ -105,17 +112,24 @@ int TcpConnection::doSelect()
 				if (recvSize == 0) {
 					FD_CLR(m_readFdSet.fd_array[i], &m_readFdSet);
 					closesocket(m_readFdSet.fd_array[i]);
-					for (auto iter = m_clientSockets.begin(); iter != m_clientSockets.end(); iter++) {
-						if (*iter == m_readFdSet.fd_array[i]) {
-							m_clientSockets.erase(iter);
-							break;
-						}
-					}
+					delete m_clientSocketsMap[m_readFdSet.fd_array[i]];
+					m_clientSocketsMap.erase(m_readFdSet.fd_array[i]);
 					return 0;
 				}
 
 				m_currentClientSocket = m_readFdSet.fd_array[i];
 				m_recvBuffer[recvSize] = '\0';
+
+				RTSP_OPTIONS rtspOption = RTSP_NONE;
+				std::string respData = m_clientSocketsMap[m_readFdSet.fd_array[i]]->doConversation(m_recvBuffer, getClntIp(), rtspOption);
+				if (!respData.empty()) {
+					send(m_readFdSet.fd_array[i], respData.data(), respData.length(), 0);
+				}
+
+				if (rtspOption == RTSP_PLAY) {
+					m_clientSocketsMap[m_readFdSet.fd_array[i]]->startPlay();
+				}
+
 				return recvSize + 1;
 			}
 		}
