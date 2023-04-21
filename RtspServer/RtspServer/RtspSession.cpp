@@ -204,10 +204,100 @@ out:
 
 }
 
-int clntRtpPort = -1;
-int clntRtpPort1 = -1;
-int serverRtpSockfd = -1, serverRtcpSockfd = -1;
-std::string ClntIp;
+
+
+struct AdtsHeader {
+	unsigned int syncword;  //12 bit 同步字 '1111 1111 1111'，一个ADTS帧的开始
+	uint8_t id;        //1 bit 0代表MPEG-4, 1代表MPEG-2。
+	uint8_t layer;     //2 bit 必须为0
+	uint8_t protectionAbsent;  //1 bit 1代表没有CRC，0代表有CRC
+	uint8_t profile;           //1 bit AAC级别（MPEG-2 AAC中定义了3种profile，MPEG-4 AAC中定义了6种profile）
+	uint8_t samplingFreqIndex; //4 bit 采样率
+	uint8_t privateBit;        //1bit 编码时设置为0，解码时忽略
+	uint8_t channelCfg;        //3 bit 声道数量
+	uint8_t originalCopy;      //1bit 编码时设置为0，解码时忽略
+	uint8_t home;               //1 bit 编码时设置为0，解码时忽略
+
+	uint8_t copyrightIdentificationBit;   //1 bit 编码时设置为0，解码时忽略
+	uint8_t copyrightIdentificationStart; //1 bit 编码时设置为0，解码时忽略
+	unsigned int aacFrameLength;               //13 bit 一个ADTS帧的长度包括ADTS头和AAC原始流
+	unsigned int adtsBufferFullness;           //11 bit 缓冲区充满度，0x7FF说明是码率可变的码流，不需要此字段。CBR可能需要此字段，不同编码器使用情况不同。这个在使用音频编码的时候需要注意。
+
+	/* number_of_raw_data_blocks_in_frame
+	 * 表示ADTS帧中有number_of_raw_data_blocks_in_frame + 1个AAC原始帧
+	 * 所以说number_of_raw_data_blocks_in_frame == 0
+	 * 表示说ADTS帧中有一个AAC数据块并不是说没有。(一个AAC原始帧包含一段时间内1024个采样及相关数据)
+	 */
+	uint8_t numberOfRawDataBlockInFrame; //2 bit
+};
+
+static int parseAdtsHeader(uint8_t* in, struct AdtsHeader* res) {
+	static int frame_number = 0;
+	memset(res, 0, sizeof(*res));
+
+	if ((in[0] == 0xFF) && ((in[1] & 0xF0) == 0xF0))
+	{
+		res->id = ((uint8_t)in[1] & 0x08) >> 3;//第二个字节与0x08与运算之后，获得第13位bit对应的值
+		res->layer = ((uint8_t)in[1] & 0x06) >> 1;//第二个字节与0x06与运算之后，右移1位，获得第14,15位两个bit对应的值
+		res->protectionAbsent = (uint8_t)in[1] & 0x01;
+		res->profile = ((uint8_t)in[2] & 0xc0) >> 6;
+		res->samplingFreqIndex = ((uint8_t)in[2] & 0x3c) >> 2;
+		res->privateBit = ((uint8_t)in[2] & 0x02) >> 1;
+		res->channelCfg = ((((uint8_t)in[2] & 0x01) << 2) | (((unsigned int)in[3] & 0xc0) >> 6));
+		res->originalCopy = ((uint8_t)in[3] & 0x20) >> 5;
+		res->home = ((uint8_t)in[3] & 0x10) >> 4;
+		res->copyrightIdentificationBit = ((uint8_t)in[3] & 0x08) >> 3;
+		res->copyrightIdentificationStart = (uint8_t)in[3] & 0x04 >> 2;
+
+		res->aacFrameLength = (((((unsigned int)in[3]) & 0x03) << 11) |
+			(((unsigned int)in[4] & 0xFF) << 3) |
+			((unsigned int)in[5] & 0xE0) >> 5);
+
+		res->adtsBufferFullness = (((unsigned int)in[5] & 0x1f) << 6 |
+			((unsigned int)in[6] & 0xfc) >> 2);
+		res->numberOfRawDataBlockInFrame = ((uint8_t)in[6] & 0x03);
+
+		return 0;
+	}
+	else
+	{
+		printf("failed to parse adts header\n");
+		return -1;
+	}
+}
+
+static int rtpSendAACFrame(int socket, const char* ip, int16_t port,
+	struct RtpPacket* rtpPacket, uint8_t* frame, uint32_t frameSize) {
+	//打包文档：https://blog.csdn.net/yangguoyu8023/article/details/106517251/
+	int ret;
+
+	rtpPacket->payload[0] = 0x00;
+	rtpPacket->payload[1] = 0x10;
+	rtpPacket->payload[2] = (frameSize & 0x1FE0) >> 5; //高8位
+	rtpPacket->payload[3] = (frameSize & 0x1F) << 3; //低5位
+
+	memcpy(rtpPacket->payload + 4, frame, frameSize);
+
+	ret = rtpSendPacketOverUdp(socket, ip, port, rtpPacket, frameSize + 4);
+	if (ret < 0)
+	{
+		printf("failed to send rtp packet\n");
+		return -1;
+	}
+
+	rtpPacket->rtpHeader.seq++;
+
+	/*
+	 * 如果采样频率是44100
+	 * 一般AAC每个1024个采样为一帧
+	 * 所以一秒就有 44100 / 1024 = 43帧
+	 * 时间增量就是 44100 / 43 = 1025
+	 * 一帧的时间为 1 / 43 = 23ms
+	 */
+	rtpPacket->rtpHeader.timestamp += 1025;
+
+	return 0;
+}
 
 RtspSession::RtspSession(): m_playingStatus(PLAY_NONE)
 {
@@ -221,7 +311,7 @@ RtspSession::~RtspSession()
 
 std::string RtspSession::doConversation(std::string data, std::string clntIp, RTSP_OPTIONS& rtspOption)
 {
-	ClntIp = clntIp;
+	m_clientIp = clntIp;
 
 	char sendBuffer[SEND_BUFFER_SIZE];
 	char method[40];
@@ -249,21 +339,32 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 			}
 		}
 		else if (!strncmp(firstLine, "Transport:", strlen("Transport:"))) {
-			//vlc
-			if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
-				&clientRtpPort, &clientRtcpPort) != 2) {
-				//ffplay
-				if (sscanf(firstLine, "Transport: RTP/AVP/UDP;unicast;client_port=%d-%d\r\n",
-					&clientRtpPort, &clientRtcpPort) != 2) {
-					printf("parse Transport error \n");
+			//TODO,,setup请求，先解析Transport这一行，再解析CSeq，导致cseq来定义，先这样处理
+			static int Cseq = 3;
+			if (Cseq == 4) {
+				//vlc
+				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
+					&m_clientRtpUdpPortForAudio, &m_clientRtcpDupPortForAudio) != 2) {
+					//ffplay
+					if (sscanf(firstLine, "Transport: RTP/AVP/UDP;unicast;client_port=%d-%d\r\n",
+						&m_clientRtpUdpPortForAudio, &m_clientRtcpDupPortForAudio) != 2) {
+						printf("parse Transport error \n");
+					}
 				}
 			}
-			if (clntRtpPort == -1) {
-				clntRtpPort = clientRtpPort;
+			if (Cseq == 3) {
+				//vlc
+				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
+					&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
+					//ffplay
+					if (sscanf(firstLine, "Transport: RTP/AVP/UDP;unicast;client_port=%d-%d\r\n",
+						&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
+						printf("parse Transport error \n");
+					}
+				}
+				Cseq = 4;
 			}
-			else {
-				clntRtpPort1 = clientRtpPort;
-			}
+			
 		}
 
 		firstLine = strtok(nullptr, sep);
@@ -282,27 +383,47 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 		rtspOption = RTSP_DESCRIBE;
 	}
 	else if (!strcmp(method, "SETUP")) {
-		if (handleSetupReq(sendBuffer, cseq, clientRtpPort)) {
+		if (handleSetupReq(sendBuffer, cseq, m_clientRtpUdpPortForVideo)) {
 			printf("handle DESCRIBE ERROR\n");
 		}
 
 		rtspOption = RTSP_SETUP;
 
-		serverRtpSockfd = createUdpSocket();
-		serverRtcpSockfd = createUdpSocket();
+		if (cseq == 3) {
+			m_rtpUdpSockForVideo = createUdpSocket();
+			m_rtcpUdpSockForVideo = createUdpSocket();
 
-		if (serverRtpSockfd < 0 || serverRtcpSockfd < 0)
-		{
-			printf("failed to create udp socket\n");
-			return "";
-		}
+			if (m_rtpUdpSockForVideo < 0 || m_rtcpUdpSockForVideo < 0)
+			{
+				printf("failed to create udp socket\n");
+				return "";
+			}
 
-		if (bindSocketAddr(serverRtpSockfd, "0.0.0.0", SERVER_RTP_PORT) < 0 ||
-			bindSocketAddr(serverRtcpSockfd, "0.0.0.0", SERVER_RTP_PORT + 1) < 0)
-		{
-			printf("failed to bind addr\n");
-			return "";
+			if (bindSocketAddr(m_rtpUdpSockForVideo, "0.0.0.0", SERVER_RTP_PORT) < 0 ||
+				bindSocketAddr(m_rtcpUdpSockForVideo, "0.0.0.0", SERVER_RTP_PORT + 1) < 0)
+			{
+				printf("failed to bind addr\n");
+				return "";
+			}
 		}
+		else if (cseq == 4) {
+			m_rtpUdpSockForAudio = createUdpSocket();
+			m_rtcpUdpSockForAudio = createUdpSocket();
+
+			if (m_rtpUdpSockForAudio < 0 || m_rtcpUdpSockForAudio < 0)
+			{
+				printf("failed to create udp socket\n");
+				return "";
+			}
+
+			if (bindSocketAddr(m_rtpUdpSockForAudio, "0.0.0.0", SERVER_RTP_PORT + 2) < 0 ||
+				bindSocketAddr(m_rtcpUdpSockForAudio, "0.0.0.0", SERVER_RTP_PORT + 1 + 2) < 0)
+			{
+				printf("failed to bind addr\n");
+				return "";
+			}
+		}
+		
 	}
 	else if (!strcmp(method, "PLAY")) {
 		if (handlePlayReq(sendBuffer, cseq)) {
@@ -336,7 +457,7 @@ int RtspSession::handleOptionReq(char* result, int cseq)
 {
 	sprintf(result, "RTSP/1.0 200 OK\r\n"
 		"CSeq: %d\r\n"
-		"Public: OPTIONS, DESCRIBE, SETUP, PLAY\r\n"
+		"Public: OPTIONS, DESCRIBE, SETUP, PLAY, PAUSE, TEARDOWN\r\n"
 		"\r\n",
 		cseq);
 
@@ -356,7 +477,12 @@ int RtspSession::handleDescribeReq(char* result, int cseq, char *url)
 		"a=control:*\r\n"
 		"m=video 0 RTP/AVP 96\r\n"
 		"a=rtpmap:96 H264/90000\r\n"
-		"a=control:track0\r\n",
+		"a=control:track0\r\n"
+		"m=audio 1 RTP/AVP 97\r\n"
+		"a=rtpmap:97 mpeg4-generic/44100/2\r\n"
+		"a=fmtp:97 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210;\r\n"
+		"a=control:track1\r\n",
+
 		time(NULL), localIp);
 
 	sprintf(result, "RTSP/1.0 200 OK\r\nCSeq: %d\r\n"
@@ -374,6 +500,11 @@ int RtspSession::handleDescribeReq(char* result, int cseq, char *url)
 
 int RtspSession::handleSetupReq(char* result, int cseq, int clientRtpPort)
 {
+	int rtpPort = SERVER_RTP_PORT;
+	if (cseq == 4) {
+		rtpPort += 2;
+	}
+
 	sprintf(result, "RTSP/1.0 200 OK\r\n"
 		"CSeq: %d\r\n"
 		"Transport: RTP/AVP;unicast;client_port=%d-%d;server_port=%d-%d\r\n"
@@ -382,8 +513,8 @@ int RtspSession::handleSetupReq(char* result, int cseq, int clientRtpPort)
 		cseq,
 		clientRtpPort,
 		clientRtpPort + 1,
-		SERVER_RTP_PORT,
-		SERVER_RTP_PORT + 1);
+		rtpPort,
+		rtpPort + 1);
 
 	return 0;
 }
@@ -426,60 +557,106 @@ int RtspSession::sendRtpFrame(void *obj)
 		Sleep(40);
 	}
 
-	int frameSize, startCode;
-	char* frame = (char*)malloc(500000);
-	struct RtpPacket* rtpPacket = (struct RtpPacket*)malloc(500000);
-	FILE* fp = fopen("test.h264", "rb");
-	if (!fp) {
-		printf("读取 %s 失败\n", "test.h264");
-		return -1;
-	}
-	rtpHeaderInit(rtpPacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H264, 0,
-		0, 0, 0x88923423);
+	std::thread videoThread([&]() {
+		int frameSize, startCode;
+		char* frame = (char*)malloc(500000);
+		struct RtpPacket* rtpPacket = (struct RtpPacket*)malloc(500000);
+		FILE* fp = fopen("test.h264", "rb");
+		if (!fp) {
+			printf("读取 %s 失败\n", "test.h264");
+			return -1;
+		}
+		rtpHeaderInit(rtpPacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H264, 0,
+			0, 0, 0x88923423);
 
-	printf("start play\n");
-	printf("client ip:%s\n", ClntIp.c_str());
-	printf("client port:%d\n", clntRtpPort);
+		printf("start play\n");
+		printf("client ip:%s\n", m_clientIp.c_str());
+		printf("client port:%d\n", m_clientRtpUdpPortForVideo);
+	
+		while (true) {
+			if (rtspSessionObj->m_playingStatus == PLAY_STOP) {
+				return 0;
+			}
 
-	int port;
-	if (clntRtpPort1 == -1) {
-		port = clntRtpPort;
-	}
-	else{
-		port = clntRtpPort1;
-	}
+			if (rtspSessionObj->m_playingStatus != PLAY_START) {
+				Sleep(40);
+				continue;
+			}
 
-	while (true) {
-		if (rtspSessionObj->m_playingStatus == PLAY_STOP) {
-			return 0;
+			frameSize = getFrameFromH264File(fp, frame, 500000);
+			if (frameSize < 0)
+			{
+				printf("读取%s结束,frameSize=%d \n", "test.h264", frameSize);
+				break;
+			}
+
+			if (startCode3(frame))
+				startCode = 3;
+			else
+				startCode = 4;
+
+			frameSize -= startCode;
+			rtpSendH264Frame(m_rtpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForVideo,
+				rtpPacket, frame + startCode, frameSize);
+
+			Sleep(20);
+			//usleep(40000);//1000/25 * 1000
+		}
+		free(frame);
+		free(rtpPacket);
+	}
+	);
+
+	std::thread audioThread([&]() {
+		struct AdtsHeader adtsHeader;
+		struct RtpPacket* rtpPacket;
+		uint8_t* frame;
+		int ret;
+
+		FILE* fp = fopen("test.aac", "rb");
+		if (!fp) {
+			printf("读取 %s 失败\n", "test.aac");
 		}
 
-		if (rtspSessionObj->m_playingStatus != PLAY_START) {
-			Sleep(40);
-			continue;
-		}
+		frame = (uint8_t*)malloc(5000);
+		rtpPacket = (struct RtpPacket*)malloc(5000);
 
-		frameSize = getFrameFromH264File(fp, frame, 500000);
-		if (frameSize < 0)
+		rtpHeaderInit(rtpPacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_AAC, 1, 0, 0, 0x32411);
+
+		while (true)
 		{
-			printf("读取%s结束,frameSize=%d \n", "test.h264", frameSize);
-			break;
+			ret = fread(frame, 1, 7, fp);
+			if (ret <= 0)
+			{
+				printf("fread err\n");
+				break;
+			}
+			printf("fread ret=%d \n", ret);
+
+			if (parseAdtsHeader(frame, &adtsHeader) < 0)
+			{
+				printf("parseAdtsHeader err\n");
+				break;
+			}
+			ret = fread(frame, 1, adtsHeader.aacFrameLength - 7, fp);
+			if (ret <= 0)
+			{
+				printf("fread err\n");
+				break;
+			}
+
+			rtpSendAACFrame(m_rtcpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForAudio,
+				rtpPacket, frame, adtsHeader.aacFrameLength - 7);
+
+			Sleep(23);
+			//usleep(23223);//1000/43.06 * 1000
 		}
 
-		if (startCode3(frame))
-			startCode = 3;
-		else
-			startCode = 4;
-
-		frameSize -= startCode;
-		rtpSendH264Frame(serverRtpSockfd, ClntIp.c_str(), port,
-			rtpPacket, frame + startCode, frameSize);
-
-		Sleep(40);
-		//usleep(40000);//1000/25 * 1000
-	}
-	free(frame);
-	free(rtpPacket);
+		free(frame);
+		free(rtpPacket);
+	});
+	videoThread.join();
+	audioThread.join();
 
 	return 0;
 }

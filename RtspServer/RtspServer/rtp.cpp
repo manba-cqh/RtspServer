@@ -52,7 +52,7 @@ int rtpSendPacketOverUdp(int serverRtpSockfd, const char* ip, int16_t port, stru
 
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = inet_addr(ip);
+    addr.sin_addr.s_addr = inet_addr(ip);//TODO  暂停拉流后，这里崩溃
 
     rtpPacket->rtpHeader.seq = htons(rtpPacket->rtpHeader.seq);//从主机字节顺序转变成网络字节顺序
     rtpPacket->rtpHeader.timestamp = htonl(rtpPacket->rtpHeader.timestamp);

@@ -26,4 +26,16 @@ private:
 
 private:
 	PLAY_STATUS m_playingStatus;
+
+	SOCKET m_rtpUdpSockForVideo;
+	SOCKET m_rtpUdpSockForAudio;
+	SOCKET m_rtcpUdpSockForVideo;
+	SOCKET m_rtcpUdpSockForAudio;
+
+	std::string m_clientIp;
+
+	int m_clientRtpUdpPortForVideo;
+	int m_clientRtcpDupPortForVideo;
+	int m_clientRtpUdpPortForAudio;
+	int m_clientRtcpDupPortForAudio;
 };
