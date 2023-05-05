@@ -38,4 +38,6 @@ private:
 	int m_clientRtcpDupPortForVideo;
 	int m_clientRtpUdpPortForAudio;
 	int m_clientRtcpDupPortForAudio;
+
+	bool m_isAauthorized;
 };

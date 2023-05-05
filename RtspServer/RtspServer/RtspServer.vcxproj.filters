@@ -13,6 +13,9 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="base64">
+      <UniqueIdentifier>{f4e02a3c-e92a-417f-b3bf-2a0321329fb8}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -27,6 +30,15 @@
     <ClCompile Include="rtp.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="base64\cdecode.c">
+      <Filter>base64</Filter>
+    </ClCompile>
+    <ClCompile Include="base64\base64.c">
+      <Filter>base64</Filter>
+    </ClCompile>
+    <ClCompile Include="base64\cencode.c">
+      <Filter>base64</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="TcpConnection.h">
@@ -40,6 +52,15 @@
     </ClInclude>
     <ClInclude Include="rtp.h">
       <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="base64\cdecode.h">
+      <Filter>base64</Filter>
+    </ClInclude>
+    <ClInclude Include="base64\cencode.h">
+      <Filter>base64</Filter>
+    </ClInclude>
+    <ClInclude Include="base64\base64.h">
+      <Filter>base64</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

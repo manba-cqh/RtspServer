@@ -1,10 +1,12 @@
 #include <thread>
 
+extern "C" {
+#include "base64/base64.h"
+}
+
 #include "RtspDef.h"
 #include "RtspSession.h"
 #include "rtp.h"
-
-
 
 static int createUdpSocket()
 {
@@ -299,7 +301,7 @@ static int rtpSendAACFrame(int socket, const char* ip, int16_t port,
 	return 0;
 }
 
-RtspSession::RtspSession(): m_playingStatus(PLAY_NONE)
+RtspSession::RtspSession() : m_playingStatus(PLAY_NONE), m_isAauthorized(false)
 {
 
 }
@@ -339,9 +341,9 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 			}
 		}
 		else if (!strncmp(firstLine, "Transport:", strlen("Transport:"))) {
-			//TODO,,setup请求，先解析Transport这一行，再解析CSeq，导致cseq来定义，先这样处理
-			static int Cseq = 3;
-			if (Cseq == 4) {
+			//TODO,,setup请求，先解析Transport这一行，再解析CSeq，导致cseq未定义，先这样处理
+			static int Cseq = 5;
+			if (Cseq == 6) {
 				//vlc
 				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
 					&m_clientRtpUdpPortForAudio, &m_clientRtcpDupPortForAudio) != 2) {
@@ -352,7 +354,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 					}
 				}
 			}
-			if (Cseq == 3) {
+			if (Cseq == 5) {
 				//vlc
 				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
 					&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
@@ -362,9 +364,19 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 						printf("parse Transport error \n");
 					}
 				}
-				Cseq = 4;
+				Cseq = 6;
 			}
 			
+		}
+		//基本认证，只是通过base64加密，以后加上摘要认证md5校验
+		else if (!strncmp(firstLine, "Authorization:", strlen("Authorization"))) {
+			if (strstr(firstLine, "Basic") != nullptr) {
+				char* encodedStr = firstLine + strlen("Authorization: Basic ");
+				char *decodedStr = decode(encodedStr);
+				if (!strcmp(decodedStr, "admin:1234qwer")) {
+					m_isAauthorized = true;
+				}
+			}
 		}
 
 		firstLine = strtok(nullptr, sep);
@@ -389,7 +401,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 
 		rtspOption = RTSP_SETUP;
 
-		if (cseq == 3) {
+		if (cseq == 5) {
 			m_rtpUdpSockForVideo = createUdpSocket();
 			m_rtcpUdpSockForVideo = createUdpSocket();
 
@@ -406,7 +418,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 				return "";
 			}
 		}
-		else if (cseq == 4) {
+		else if (cseq == 6) {
 			m_rtpUdpSockForAudio = createUdpSocket();
 			m_rtcpUdpSockForAudio = createUdpSocket();
 
@@ -466,34 +478,42 @@ int RtspSession::handleOptionReq(char* result, int cseq)
 
 int RtspSession::handleDescribeReq(char* result, int cseq, char *url)
 {
-	char sdp[500];
-	char localIp[100];
+	if (m_isAauthorized) {
+		char sdp[500];
+		char localIp[100];
 
-	sscanf(url, "rtsp://%[^:]:", localIp);
+		sscanf(url, "rtsp://%[^:]:", localIp);
 
-	sprintf(sdp, "v=0\r\n"
-		"o=- 9%ld 1 IN IP4 %s\r\n"
-		"t=0 0\r\n"
-		"a=control:*\r\n"
-		"m=video 0 RTP/AVP 96\r\n"
-		"a=rtpmap:96 H264/90000\r\n"
-		"a=control:track0\r\n"
-		"m=audio 1 RTP/AVP 97\r\n"
-		"a=rtpmap:97 mpeg4-generic/44100/2\r\n"
-		"a=fmtp:97 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210;\r\n"
-		"a=control:track1\r\n",
+		sprintf(sdp, "v=0\r\n"
+			"o=- 9%ld 1 IN IP4 %s\r\n"
+			"t=0 0\r\n"
+			"a=control:*\r\n"
+			"m=video 0 RTP/AVP 96\r\n"
+			"a=rtpmap:96 H264/90000\r\n"
+			"a=control:track0\r\n"
+			"m=audio 0 RTP/AVP 97\r\n"
+			"a=rtpmap:97 mpeg4-generic/44100/2\r\n"
+			"a=fmtp:97 profile-level-id=1;mode=AAC-hbr;sizelength=13;indexlength=3;indexdeltalength=3;config=1210;\r\n"
+			"a=control:track1\r\n",
 
-		time(NULL), localIp);
+			time(NULL), localIp);
 
-	sprintf(result, "RTSP/1.0 200 OK\r\nCSeq: %d\r\n"
-		"Content-Base: %s\r\n"
-		"Content-type: application/sdp\r\n"
-		"Content-length: %zu\r\n\r\n"
-		"%s",
-		cseq,
-		url,
-		strlen(sdp),
-		sdp);
+		sprintf(result, "RTSP/1.0 200 OK\r\nCSeq: %d\r\n"
+			"Content-Base: %s\r\n"
+			"Content-type: application/sdp\r\n"
+			"Content-length: %zu\r\n\r\n"
+			"%s",
+			cseq,
+			url,
+			strlen(sdp),
+			sdp);
+	}
+	else {
+		sprintf(result, "RTSP/1.0 401 Unauthorized\r\n"
+			"CSeq: %d\r\n"
+			"WWW-Authenticate: Basic realm=\"RTSPD\"\r\n\r\n",
+			cseq);
+	}
 
 	return 0;
 }
