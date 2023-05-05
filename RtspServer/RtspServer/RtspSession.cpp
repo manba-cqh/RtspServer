@@ -301,7 +301,7 @@ static int rtpSendAACFrame(int socket, const char* ip, int16_t port,
 	return 0;
 }
 
-RtspSession::RtspSession() : m_playingStatus(PLAY_NONE), m_isAauthorized(false)
+RtspSession::RtspSession() : m_playingStatus(PLAY_NONE), m_isAauthorized(false), m_setupReqSeq(-1)
 {
 
 }
@@ -331,6 +331,9 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 			strstr(firstLine, "PLAY") ||
 			strstr(firstLine, "PAUSE") ||
 			strstr(firstLine, "TEARDOWN")) {
+			if (strstr(firstLine, "SETUP")) {
+				m_setupReqSeq++;
+			}
 			if (sscanf(firstLine, "%s %s %s\r\n", &method, &url, &version) != 3) {
 				printf("parse  error\n");
 			}
@@ -341,9 +344,18 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 			}
 		}
 		else if (!strncmp(firstLine, "Transport:", strlen("Transport:"))) {
-			//TODO,,setup请求，先解析Transport这一行，再解析CSeq，导致cseq未定义，先这样处理
-			static int Cseq = 5;
-			if (Cseq == 6) {
+			if (m_setupReqSeq == 0) {
+				//vlc
+				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
+					&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
+					//ffplay
+					if (sscanf(firstLine, "Transport: RTP/AVP/UDP;unicast;client_port=%d-%d\r\n",
+						&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
+						printf("parse Transport error \n");
+					}
+				}
+			}
+			else {
 				//vlc
 				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
 					&m_clientRtpUdpPortForAudio, &m_clientRtcpDupPortForAudio) != 2) {
@@ -354,19 +366,6 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 					}
 				}
 			}
-			if (Cseq == 5) {
-				//vlc
-				if (sscanf(firstLine, "Transport: RTP/AVP;unicast;client_port=%d-%d\r\n",
-					&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
-					//ffplay
-					if (sscanf(firstLine, "Transport: RTP/AVP/UDP;unicast;client_port=%d-%d\r\n",
-						&m_clientRtpUdpPortForVideo, &m_clientRtcpDupPortForVideo) != 2) {
-						printf("parse Transport error \n");
-					}
-				}
-				Cseq = 6;
-			}
-			
 		}
 		//基本认证，只是通过base64加密，以后加上摘要认证md5校验
 		else if (!strncmp(firstLine, "Authorization:", strlen("Authorization"))) {
@@ -401,7 +400,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 
 		rtspOption = RTSP_SETUP;
 
-		if (cseq == 5) {
+		if (m_setupReqSeq == 0) {
 			m_rtpUdpSockForVideo = createUdpSocket();
 			m_rtcpUdpSockForVideo = createUdpSocket();
 
@@ -418,7 +417,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 				return "";
 			}
 		}
-		else if (cseq == 6) {
+		else {
 			m_rtpUdpSockForAudio = createUdpSocket();
 			m_rtcpUdpSockForAudio = createUdpSocket();
 

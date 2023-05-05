@@ -40,4 +40,5 @@ private:
 	int m_clientRtcpDupPortForAudio;
 
 	bool m_isAauthorized;
+	int m_setupReqSeq;		//SETUP请求序号，第一次0、第二次1...
 };
