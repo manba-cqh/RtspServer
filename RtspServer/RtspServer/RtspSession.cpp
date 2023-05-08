@@ -165,13 +165,13 @@ static int rtpSendH264Frame(int serverRtpSockfd, const char* ip, int16_t port,
 		// 发送完整的包
 		for (i = 0; i < pktNum; i++)
 		{
-			rtpPacket->payload[0] = (naluType & 0x60) | 28;
-			rtpPacket->payload[1] = naluType & 0x1F;
+			rtpPacket->payload[0] = (naluType & 0b01100000) | 28;
+			rtpPacket->payload[1] = naluType & 0b00011111;
 
 			if (i == 0) //第一包数据
-				rtpPacket->payload[1] |= 0x80; // start
+				rtpPacket->payload[1] |= 0b10000000; // start
 			else if (remainPktSize == 0 && i == pktNum - 1) //最后一包数据
-				rtpPacket->payload[1] |= 0x40; // end
+				rtpPacket->payload[1] |= 0b01000000; // end
 
 			memcpy(rtpPacket->payload + 2, frame + pos, RTP_MAX_PKT_SIZE);
 			ret = rtpSendPacketOverUdp(serverRtpSockfd, ip, port, rtpPacket, RTP_MAX_PKT_SIZE + 2);
@@ -615,8 +615,8 @@ int RtspSession::sendRtpFrame()
 			rtpSendH264Frame(m_rtpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForVideo,
 				rtpPacket, frame + startCode, frameSize);
 
+			//视频fps是30，做延时分发
 			Sleep(20);
-			//usleep(40000);//1000/25 * 1000
 		}
 		free(frame);
 		free(rtpPacket);
