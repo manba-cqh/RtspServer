@@ -442,8 +442,7 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 		}
 		else {
 			//开启发送rtp包请求
-			std::thread t = std::thread(&RtspSession::sendRtpFrame, this, this);
-			t.detach();
+			std::thread(&RtspSession::sendRtpFrame, this).detach();
 		}
 
 		rtspOption = RTSP_PLAY;
@@ -568,11 +567,9 @@ int RtspSession::handleTeardownReq(char* result, int cseq)
 	return 0;
 }
 
-int RtspSession::sendRtpFrame(void *obj)
+int RtspSession::sendRtpFrame()
 {
-	RtspSession* rtspSessionObj = (RtspSession*)obj;
-
-	while (rtspSessionObj->m_playingStatus != PLAY_START) {
+	while (m_playingStatus != PLAY_START) {
 		Sleep(40);
 	}
 
@@ -593,11 +590,11 @@ int RtspSession::sendRtpFrame(void *obj)
 		printf("client port:%d\n", m_clientRtpUdpPortForVideo);
 	
 		while (true) {
-			if (rtspSessionObj->m_playingStatus == PLAY_STOP) {
+			if (m_playingStatus == PLAY_STOP) {
 				return 0;
 			}
 
-			if (rtspSessionObj->m_playingStatus != PLAY_START) {
+			if (m_playingStatus != PLAY_START) {
 				Sleep(40);
 				continue;
 			}
@@ -644,6 +641,15 @@ int RtspSession::sendRtpFrame(void *obj)
 
 		while (true)
 		{
+			if (m_playingStatus == PLAY_STOP) {
+				return 0;
+			}
+
+			if (m_playingStatus != PLAY_START) {
+				Sleep(23);
+				continue;
+			}
+
 			ret = fread(frame, 1, 7, fp);
 			if (ret <= 0)
 			{

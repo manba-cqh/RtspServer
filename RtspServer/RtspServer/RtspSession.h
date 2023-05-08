@@ -22,7 +22,7 @@ private:
 	int handlePauseReq(char* result, int cseq);
 	int handleTeardownReq(char* result, int cseq);
 
-	int sendRtpFrame(void *obj);
+	int sendRtpFrame();
 
 private:
 	PLAY_STATUS m_playingStatus;
