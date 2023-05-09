@@ -16,6 +16,9 @@
     <Filter Include="base64">
       <UniqueIdentifier>{f4e02a3c-e92a-417f-b3bf-2a0321329fb8}</UniqueIdentifier>
     </Filter>
+    <Filter Include="threadPool">
+      <UniqueIdentifier>{90dc77e8-50fb-497e-8b6e-29a45063b06b}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
@@ -61,6 +64,9 @@
     </ClInclude>
     <ClInclude Include="base64\base64.h">
       <Filter>base64</Filter>
+    </ClInclude>
+    <ClInclude Include="ThreadPool.h">
+      <Filter>threadPool</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

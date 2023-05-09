@@ -5,6 +5,9 @@
 
 #include "RtspDef.h"
 
+class ThreadPool;
+struct RtpPacket;
+
 class RtspSession
 {
 public:
@@ -24,6 +27,11 @@ private:
 
 	int sendRtpFrame();
 
+	int sendVideoFrameFunc();
+	int sendAudioFrameFunc();
+
+	void init();
+
 private:
 	PLAY_STATUS m_playingStatus;
 
@@ -41,4 +49,14 @@ private:
 
 	bool m_isAauthorized;
 	int m_setupReqSeq;		//SETUP请求序号，第一次0、第二次1...
+
+	FILE* m_videoFd;
+	FILE* m_audioFd;
+
+	RtpPacket* m_rtpVidoePacket;
+	RtpPacket* m_rtpAudioPacket;
+
+	ThreadPool* m_threadPool;
+	int n_videoFrameWaitTime;
+	int n_audioFrameWaitTime;
 };

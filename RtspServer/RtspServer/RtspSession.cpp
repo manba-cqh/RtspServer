@@ -7,6 +7,7 @@ extern "C" {
 #include "RtspDef.h"
 #include "RtspSession.h"
 #include "rtp.h"
+#include "threadPool.h"
 
 static int createUdpSocket()
 {
@@ -301,14 +302,44 @@ static int rtpSendAACFrame(int socket, const char* ip, int16_t port,
 	return 0;
 }
 
-RtspSession::RtspSession() : m_playingStatus(PLAY_NONE), m_isAauthorized(false), m_setupReqSeq(-1)
+RtspSession::RtspSession() : m_playingStatus(PLAY_NONE), m_isAauthorized(false), m_setupReqSeq(-1), 
+	m_threadPool(new ThreadPool(4)), n_videoFrameWaitTime(GetTickCount64()), n_audioFrameWaitTime(GetTickCount64())
 {
-
+	init();
 }
 
 RtspSession::~RtspSession()
 {
+	if (m_threadPool) {
+		delete m_threadPool;
+		m_threadPool = nullptr;
+	}
 
+	fclose(m_videoFd);
+	fclose(m_audioFd);
+
+	if (m_rtpVidoePacket) {
+		delete m_rtpVidoePacket;
+		m_rtpVidoePacket = nullptr;
+	}
+
+	if (m_rtpAudioPacket) {
+		delete m_rtpAudioPacket;
+		m_rtpAudioPacket = nullptr;
+	}
+}
+
+void RtspSession::init()
+{
+	m_videoFd = fopen("test.h264", "rb");
+	m_audioFd = fopen("test.aac", "rb");
+
+	m_rtpVidoePacket = (RtpPacket*)new char(500000);
+	m_rtpAudioPacket = (RtpPacket*)new char(5000);
+
+	rtpHeaderInit(m_rtpVidoePacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H264, 0,
+		0, 0, 0x88923423);
+	rtpHeaderInit(m_rtpAudioPacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_AAC, 1, 0, 0, 0x32411);
 }
 
 std::string RtspSession::doConversation(std::string data, std::string clntIp, RTSP_OPTIONS& rtspOption)
@@ -441,8 +472,8 @@ std::string RtspSession::doConversation(std::string data, std::string clntIp, RT
 			printf("handle PLAY ERROR\n");
 		}
 		else {
-			//开启发送rtp包请求
-			std::thread(&RtspSession::sendRtpFrame, this).detach();
+			m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
+			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
 		}
 
 		rtspOption = RTSP_PLAY;
@@ -567,121 +598,114 @@ int RtspSession::handleTeardownReq(char* result, int cseq)
 	return 0;
 }
 
-int RtspSession::sendRtpFrame()
+int RtspSession::sendVideoFrameFunc()
 {
-	while (m_playingStatus != PLAY_START) {
-		Sleep(40);
+	if (m_videoFd == nullptr) {
+		return -1;
 	}
 
-	std::thread videoThread([&]() {
-		int frameSize, startCode;
-		char* frame = (char*)malloc(500000);
-		struct RtpPacket* rtpPacket = (struct RtpPacket*)malloc(500000);
-		FILE* fp = fopen("test.h264", "rb");
-		if (!fp) {
-			printf("读取 %s 失败\n", "test.h264");
+	if (GetTickCount64() - n_videoFrameWaitTime < 20) {
+		Sleep(1);
+		m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
+		return 0;
+	}
+	n_videoFrameWaitTime = GetTickCount64();
+
+	int frameSize, startCode;
+	char* frame = (char*)malloc(500000);
+
+	if (m_playingStatus == PLAY_STOP) {
+		m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
+		return 0;
+	}
+
+	if (m_playingStatus != PLAY_START) {
+		m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
+		return 0;
+	}
+
+	frameSize = getFrameFromH264File(m_videoFd, frame, 500000);
+	if (frameSize < 0)
+	{
+		printf("读取%s结束,frameSize=%d \n", "test.h264", frameSize);
+		m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
+		return 0;
+	}
+
+	if (startCode3(frame))
+		startCode = 3;
+	else
+		startCode = 4;
+
+	frameSize -= startCode;
+	rtpSendH264Frame(m_rtpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForVideo,
+		m_rtpVidoePacket, frame + startCode, frameSize);
+
+	m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
+	
+	return 0;
+}
+
+int RtspSession::sendAudioFrameFunc()
+{
+	if (m_audioFd == nullptr) {
+		return -1;
+	}
+
+	if (GetTickCount64() - n_audioFrameWaitTime < 23) {
+		Sleep(1);
+		m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+		return 0;
+	}
+	n_audioFrameWaitTime = GetTickCount64();
+
+	struct AdtsHeader adtsHeader;
+	uint8_t* frame;
+	int ret;
+
+	frame = (uint8_t*)malloc(5000);
+
+	while (true)
+	{
+		if (m_playingStatus == PLAY_STOP) {
+			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+			return 0;
+		}
+
+		if (m_playingStatus != PLAY_START) {
+			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+			return 0;
+		}
+
+		ret = fread(frame, 1, 7, m_audioFd);
+		if (ret <= 0)
+		{
+			printf("fread err\n");
+			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
 			return -1;
 		}
-		rtpHeaderInit(rtpPacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H264, 0,
-			0, 0, 0x88923423);
+		printf("fread ret=%d \n", ret);
 
-		printf("start play\n");
-		printf("client ip:%s\n", m_clientIp.c_str());
-		printf("client port:%d\n", m_clientRtpUdpPortForVideo);
-	
-		while (true) {
-			if (m_playingStatus == PLAY_STOP) {
-				return 0;
-			}
-
-			if (m_playingStatus != PLAY_START) {
-				Sleep(40);
-				continue;
-			}
-
-			frameSize = getFrameFromH264File(fp, frame, 500000);
-			if (frameSize < 0)
-			{
-				printf("读取%s结束,frameSize=%d \n", "test.h264", frameSize);
-				break;
-			}
-
-			if (startCode3(frame))
-				startCode = 3;
-			else
-				startCode = 4;
-
-			frameSize -= startCode;
-			rtpSendH264Frame(m_rtpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForVideo,
-				rtpPacket, frame + startCode, frameSize);
-
-			//视频fps是30，做延时分发
-			Sleep(20);
-		}
-		free(frame);
-		free(rtpPacket);
-	}
-	);
-
-	std::thread audioThread([&]() {
-		struct AdtsHeader adtsHeader;
-		struct RtpPacket* rtpPacket;
-		uint8_t* frame;
-		int ret;
-
-		FILE* fp = fopen("test.aac", "rb");
-		if (!fp) {
-			printf("读取 %s 失败\n", "test.aac");
-		}
-
-		frame = (uint8_t*)malloc(5000);
-		rtpPacket = (struct RtpPacket*)malloc(5000);
-
-		rtpHeaderInit(rtpPacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_AAC, 1, 0, 0, 0x32411);
-
-		while (true)
+		if (parseAdtsHeader(frame, &adtsHeader) < 0)
 		{
-			if (m_playingStatus == PLAY_STOP) {
-				return 0;
-			}
-
-			if (m_playingStatus != PLAY_START) {
-				Sleep(23);
-				continue;
-			}
-
-			ret = fread(frame, 1, 7, fp);
-			if (ret <= 0)
-			{
-				printf("fread err\n");
-				break;
-			}
-			printf("fread ret=%d \n", ret);
-
-			if (parseAdtsHeader(frame, &adtsHeader) < 0)
-			{
-				printf("parseAdtsHeader err\n");
-				break;
-			}
-			ret = fread(frame, 1, adtsHeader.aacFrameLength - 7, fp);
-			if (ret <= 0)
-			{
-				printf("fread err\n");
-				break;
-			}
-
-			rtpSendAACFrame(m_rtcpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForAudio,
-				rtpPacket, frame, adtsHeader.aacFrameLength - 7);
-
-			Sleep(23);
-			//usleep(23223);//1000/43.06 * 1000
+			printf("parseAdtsHeader err\n");
+			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+			return -1;
+		}
+		ret = fread(frame, 1, adtsHeader.aacFrameLength - 7, m_audioFd);
+		if (ret <= 0)
+		{
+			printf("fread err\n");
+			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+			return -1;
 		}
 
-		free(frame);
-		free(rtpPacket);
-	});
-	videoThread.join();
-	audioThread.join();
+		rtpSendAACFrame(m_rtcpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForAudio,
+			m_rtpAudioPacket, frame, adtsHeader.aacFrameLength - 7);
+
+	}
+
+	m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
 
 	return 0;
 }
