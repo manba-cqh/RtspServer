@@ -57,6 +57,6 @@ private:
 	RtpPacket* m_rtpAudioPacket;
 
 	ThreadPool* m_threadPool;
-	int n_videoFrameWaitTime;
-	int n_audioFrameWaitTime;
+	ULONGLONG n_videoFrameWaitTime;
+	ULONGLONG n_audioFrameWaitTime;
 };

@@ -303,7 +303,7 @@ static int rtpSendAACFrame(int socket, const char* ip, int16_t port,
 }
 
 RtspSession::RtspSession() : m_playingStatus(PLAY_NONE), m_isAauthorized(false), m_setupReqSeq(-1), 
-	m_threadPool(new ThreadPool(4)), n_videoFrameWaitTime(GetTickCount64()), n_audioFrameWaitTime(GetTickCount64())
+	m_threadPool(new ThreadPool(8)), n_videoFrameWaitTime(GetTickCount64()), n_audioFrameWaitTime(GetTickCount64())
 {
 	init();
 }
@@ -629,7 +629,6 @@ int RtspSession::sendVideoFrameFunc()
 	if (frameSize < 0)
 	{
 		printf("¶ÁÈ¡%s½áÊø,frameSize=%d \n", "test.h264", frameSize);
-		m_threadPool->enqueue(&RtspSession::sendVideoFrameFunc, this);
 		return 0;
 	}
 
@@ -661,50 +660,46 @@ int RtspSession::sendAudioFrameFunc()
 	n_audioFrameWaitTime = GetTickCount64();
 
 	struct AdtsHeader adtsHeader;
-	uint8_t* frame;
 	int ret;
 
-	frame = (uint8_t*)malloc(5000);
+	uint8_t* frame = (uint8_t*)malloc(5000);
 
-	while (true)
-	{
-		if (m_playingStatus == PLAY_STOP) {
-			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
-			return 0;
-		}
-
-		if (m_playingStatus != PLAY_START) {
-			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
-			return 0;
-		}
-
-		ret = fread(frame, 1, 7, m_audioFd);
-		if (ret <= 0)
-		{
-			printf("fread err\n");
-			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
-			return -1;
-		}
-		printf("fread ret=%d \n", ret);
-
-		if (parseAdtsHeader(frame, &adtsHeader) < 0)
-		{
-			printf("parseAdtsHeader err\n");
-			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
-			return -1;
-		}
-		ret = fread(frame, 1, adtsHeader.aacFrameLength - 7, m_audioFd);
-		if (ret <= 0)
-		{
-			printf("fread err\n");
-			m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
-			return -1;
-		}
-
-		rtpSendAACFrame(m_rtcpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForAudio,
-			m_rtpAudioPacket, frame, adtsHeader.aacFrameLength - 7);
-
+	if (m_playingStatus == PLAY_STOP) {
+		m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+		return 0;
 	}
+
+	if (m_playingStatus != PLAY_START) {
+		m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+		return 0;
+	}
+
+	ret = fread(frame, 1, 7, m_audioFd);
+	if (ret <= 0)
+	{
+		printf("fread err\n");
+		m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+		return -1;
+	}
+
+	if (parseAdtsHeader(frame, &adtsHeader) < 0)
+	{
+		printf("parseAdtsHeader err\n");
+		m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+		return -1;
+	}
+	ret = fread(frame, 1, adtsHeader.aacFrameLength - 7, m_audioFd);
+	if (ret <= 0)
+	{
+		printf("fread err\n");
+		m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
+		return -1;
+	}
+
+	printf("audio fread ret=%d \n", ret);
+
+	rtpSendAACFrame(m_rtpUdpSockForVideo, m_clientIp.c_str(), m_clientRtpUdpPortForAudio,
+		m_rtpAudioPacket, frame, adtsHeader.aacFrameLength - 7);
 
 	m_threadPool->enqueue(&RtspSession::sendAudioFrameFunc, this);
 
