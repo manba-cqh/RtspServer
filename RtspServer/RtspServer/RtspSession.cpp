@@ -319,12 +319,12 @@ RtspSession::~RtspSession()
 	fclose(m_audioFd);
 
 	if (m_rtpVidoePacket) {
-		delete m_rtpVidoePacket;
+		free(m_rtpVidoePacket);
 		m_rtpVidoePacket = nullptr;
 	}
 
 	if (m_rtpAudioPacket) {
-		delete m_rtpAudioPacket;
+		free(m_rtpAudioPacket);
 		m_rtpAudioPacket = nullptr;
 	}
 }
@@ -334,8 +334,9 @@ void RtspSession::init()
 	m_videoFd = fopen("test.h264", "rb");
 	m_audioFd = fopen("test.aac", "rb");
 
-	m_rtpVidoePacket = (RtpPacket*)new char(500000);
-	m_rtpAudioPacket = (RtpPacket*)new char(5000);
+	//TODO，使用new会出现很多问题，还不知道原因
+	m_rtpVidoePacket = (RtpPacket*)malloc(500000);
+	m_rtpAudioPacket = (RtpPacket*)malloc(5000);
 
 	rtpHeaderInit(m_rtpVidoePacket, 0, 0, 0, RTP_VESION, RTP_PAYLOAD_TYPE_H264, 0,
 		0, 0, 0x88923423);
